@@ -345,19 +345,27 @@ def show_table(df: pd.DataFrame, percent_col_label: str = "百分比", **kwargs)
     st.dataframe(normalize_display_table(df, percent_col_label=percent_col_label), hide_index=True, width="stretch", **kwargs)
 
 
-def build_population_text(selected_colleges: List[str], selected_classes: List[str]) -> str:
+def build_population_text(selected_colleges: List[str], selected_departments: List[str], selected_classes: List[str]) -> str:
     parts: List[str] = []
     if selected_colleges:
         parts.append("、".join(selected_colleges))
+    if selected_departments:
+        parts.append("、".join(selected_departments))
     if selected_classes:
         parts.append("、".join(selected_classes))
     return "；".join(parts)
 
 
-def build_table_caption(question_label: str, group_label: str, selected_colleges: List[str], selected_classes: List[str]) -> str:
-    population_text = build_population_text(selected_colleges, selected_classes)
+def build_table_caption(
+    question_label: str,
+    group_label: str,
+    selected_colleges: List[str],
+    selected_departments: List[str],
+    selected_classes: List[str],
+) -> str:
+    population_text = build_population_text(selected_colleges, selected_departments, selected_classes)
     grouped = group_label != "(不分組)"
-    filtered = bool(selected_colleges or selected_classes)
+    filtered = bool(selected_colleges or selected_departments or selected_classes)
     if grouped and filtered:
         return f"{question_label}依{group_label}篩選在{population_text}統計"
     if grouped:
@@ -379,7 +387,7 @@ def summarize_question(
     question: str,
     qtype: str,
     group_label: str,
-    pct_mode: str,
+    pct_mode: Optional[str],
 ) -> pd.DataFrame:
     if qtype == "multi_choice":
         exploded = explode_multi(df[question])
@@ -393,35 +401,46 @@ def summarize_question(
 
     if group_label != "(不分組)" and group_label in d.columns:
         out = d.groupby([group_label, question]).size().reset_index(name="count")
-        out = add_percent(out, count_col="count", group_col=group_label, overall=(pct_mode == PCT_OVERALL))
+        if pct_mode is not None:
+            out = add_percent(out, count_col="count", group_col=group_label, overall=(pct_mode == PCT_OVERALL))
     else:
         out = d[question].astype(str).value_counts(dropna=True).reset_index()
         out.columns = [question, "count"]
-        out = add_percent(out, count_col="count", group_col=None)
+        if pct_mode is not None:
+            out = add_percent(out, count_col="count", group_col=None)
     return out
 
 
-def build_chart(df: pd.DataFrame, question: str, group_label: str, qtype: str) -> None:
+def build_chart(df: pd.DataFrame, question: str, group_label: str, qtype: str, pct_mode: Optional[str]) -> None:
     if qtype == "short_answer":
         return
+
+    y_col = "percent" if pct_mode is not None else "count"
+    text_template = "%{text:.2f}%" if y_col == "percent" else "%{text:.0f}"
+    y_axis_label = "百分比(%)" if y_col == "percent" else "人數"
+
+    legend_kwargs = dict(itemwidth=220, itemsizing="constant")
     if group_label != "(不分組)" and group_label in df.columns:
         fig = px.bar(
             df,
             x=question,
-            y="count",
+            y=y_col,
             color=group_label,
             barmode="group",
-            text="count",
+            text=y_col,
         )
+        fig.update_layout(legend_title=group_label, legend=legend_kwargs)
     else:
         fig = px.bar(
             df,
             x=question,
-            y="count",
-            text="count",
+            y=y_col,
+            text=y_col,
         )
-    fig.update_layout(xaxis_title=question, yaxis_title="人數", legend_title=group_label)
-    fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+        fig.update_layout(legend=legend_kwargs)
+
+    fig.update_layout(xaxis_title=question, yaxis_title=y_axis_label)
+    fig.update_traces(texttemplate=text_template, textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -441,6 +460,7 @@ def build_rank_trend_chart(rank_df: pd.DataFrame, group_label: str) -> None:
         xaxis_title=group_label,
         yaxis_title="平均順位（數字越小越重要）",
         legend_title="選項",
+        legend=dict(itemwidth=220, itemsizing="constant"),
     )
     fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
@@ -477,6 +497,7 @@ if df.empty:
     st.stop()
 
 selected_colleges: List[str] = []
+selected_departments: List[str] = []
 selected_classes: List[str] = []
 pct_mode: Optional[str] = None
 population_attrs: List[str] = []
@@ -515,8 +536,8 @@ with st.sidebar:
     st.divider()
 
     population_attrs = st.multiselect(
-        "學院、班級篩選（可複選交叉比對或留空表示全校）",
-        ["學院", "班級"],
+        "學院、系、班級篩選（可複選交叉比對或留空表示全校）",
+        ["學院", "學系", "班級"],
         default=[],
         placeholder="不篩選(全校)",
     )
@@ -527,6 +548,16 @@ with st.sidebar:
         selected_colleges = st.multiselect(
             "選取學院（可多選）",
             college_values + extras,
+            default=[],
+            placeholder="不篩選(全校)",
+        )
+
+    if "學系" in population_attrs and "學系" in df.columns:
+        department_values = [x for x in DEPARTMENT_ORDER if x in df["學系"].dropna().astype(str).unique()]
+        department_extras = [x for x in sorted(df["學系"].dropna().astype(str).unique()) if x not in department_values]
+        selected_departments = st.multiselect(
+            "選取學系（可多選）",
+            department_values + department_extras,
             default=[],
             placeholder="不篩選(全校)",
         )
@@ -560,10 +591,12 @@ with st.sidebar:
 
 mask = pd.Series(True, index=df.index)
 if population_attrs:
-    if selected_colleges or selected_classes:
+    if selected_colleges or selected_departments or selected_classes:
         mask = pd.Series(False, index=df.index)
         if selected_colleges:
             mask |= df["學院"].isin(selected_colleges)
+        if selected_departments:
+            mask |= df["學系"].isin(selected_departments)
         if selected_classes:
             mask |= df["班級"].isin(selected_classes)
     else:
@@ -602,13 +635,13 @@ if question_type == "multi_choice_ranked":
         build_rank_trend_chart(score_table, group_label)
 else:
     result = summarize_question(df, question, question_type, group_label, pct_mode)
-    caption = build_table_caption(question, group_label, selected_colleges, selected_classes)
+    caption = build_table_caption(question, group_label, selected_colleges, selected_departments, selected_classes)
     st.subheader(caption)
     percent_label = get_percent_column_label(pct_mode if pct_mode != "不顯示百分比" else None, group_label)
     show_table(result, percent_col_label=percent_label)
 
     if question_type != "short_answer":
-        build_chart(result, question, group_label, question_type)
+        build_chart(result, question, group_label, question_type, pct_mode)
     else:
         st.markdown("---")
         st.markdown("### 簡答題樣本（最多 20 筆）")
