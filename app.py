@@ -466,7 +466,7 @@ def build_rank_trend_chart(rank_df: pd.DataFrame, group_label: str) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-st.set_page_config(page_title="115學年度大三學習經驗調查分析", layout="wide")
+st.set_page_config(page_title="114學年度大三學習經驗調查分析", layout="wide")
 
 st.title("114學年度大三學習經驗問卷調查 - 去識別化分析")
 
