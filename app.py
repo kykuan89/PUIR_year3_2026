@@ -636,7 +636,7 @@ if question_type == "multi_choice_ranked":
 else:
     result = summarize_question(df, question, question_type, group_label, pct_mode)
     caption = build_table_caption(question, group_label, selected_colleges, selected_departments, selected_classes)
-    st.subheader(caption)
+    st.markdown(f"### 問卷題目：{question}")
     percent_label = get_percent_column_label(pct_mode if pct_mode != "不顯示百分比" else None, group_label)
     show_table(result, percent_col_label=percent_label)
 
